@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { activate, keyActions } from '../src/client';
 import { DEMO, DEMO_PREVIOUS } from '../src/fixtures';
 import { createRound, ids, reducer, reply } from '../src/model';
-import { CARD_COLUMNS, fitDetail, naturalRows, renderRound } from '../src/view';
+import { CARD_COLUMNS, CARD_ROWS, fitDetail, naturalRows, renderRound } from '../src/view';
 import type { InterviewAction, InterviewRound } from '../src/types';
 
 const demo = (): InterviewRound => createRound(DEMO, 'iv-demo', { fixture: true, previous: DEMO_PREVIOUS });
@@ -143,4 +143,52 @@ test('an opened preview is capped in compact detail and points at the full card'
   assert.doesNotMatch(plain, /line 6/);
   assert.match(plain, /… 14 more lines: f opens the full card/);
   assert.match(renderRound(big, 100, 80, { chrome: 'pane' }).frame.plain(), /line 19/);
+});
+
+// --- review fixes -------------------------------------------------------------
+
+const tall = (lines: number) => createRound({ title: 'Tall', cards: [{ ...DEMO.cards[0]!, options: DEMO.cards[0]!.options.map((option, index) => index ? option : { ...option, preview: Array.from({ length: lines }, (_, row) => `line ${row}`).join('\n') }) }] }, 'iv-tall');
+
+test('a card taller than one frame is drawn whole in stacked frames, hits included', () => {
+  const state = tall(60);
+  const rows = naturalRows(state, 100, 'pane');
+  assert.ok(rows > 64, `needs ${rows} rows`);
+  const layout = renderRound(state, 100, rows, { chrome: 'pane' });
+  assert.equal(layout.frame.frames.length, 2);
+  const plain = layout.frame.plain();
+  assert.match(plain, /line 59/);
+  assert.match(plain.split('\n').at(-2)!, /Send 0\/1/);
+  assert.equal(layout.contentHeight, layout.bodyRows, 'nothing left to scroll inside');
+  const sendRow = plain.split('\n').findIndex(row => row.includes('Send 0/1'));
+  const hit = layout.frame.hitAt(plain.split('\n')[sendRow]!.indexOf('Send') + 1, sendRow);
+  assert.equal(hit?.id, ids.send);
+  assert.equal(hit?.y, sendRow);
+});
+
+test('the drawn tree of the tallest card stays well inside the host\'s bounds for a Client', () => {
+  const huge = createRound({ title: 'Huge', cards: [{ ...DEMO.cards[0]!, context: 'context '.repeat(480), options: DEMO.cards[0]!.options.map(option => ({ ...option, consequence: 'consequence '.repeat(33), preview: Array.from({ length: 60 }, (_, row) => `${row} ${'x'.repeat(60)}`).join('\n') })) }] }, 'iv-huge');
+  const opened = run(huge, { type: 'toggle', card: 'rerank-fields' });
+  const layout = renderRound(opened, 40, naturalRows(opened, 40, 'pane'), { chrome: 'pane' });
+  assert.equal(layout.frame.height, CARD_ROWS);
+  const element = (type: string) => (props: Record<string, unknown>) => ({ type, props });
+  const tree = JSON.stringify(layout.frame.toTree({ Text: element('Text'), Box: element('Box') } as any));
+  assert.ok(tree.length < 70_000, `tree is ${tree.length} characters`);
+});
+
+test('a narrow card wraps its footer instead of dropping Send and Cancel', () => {
+  const state = createRound({ title: 'Narrow', cards: DEMO.cards.slice(0, 3) }, 'iv-narrow');
+  const layout = renderRound(state, 40, 40, { chrome: 'band' });
+  for (const id of [ids.prev, ids.next, ids.accept, ids.send, ids.cancel]) assert.ok(layout.controls.some(control => control.id === id), `${id} is reachable`);
+  const plain = layout.frame.plain();
+  assert.match(plain, /Send 0\/3/);
+  assert.match(plain, /Cancel/);
+  assert.ok(naturalRows(state, 40, 'band') > naturalRows(state, 100, 'band') - 30, 'footer rows are counted');
+});
+
+test('a stale reading shows why it cannot be confirmed instead of a Confirm button', () => {
+  let state = reply(demo(), 'rerank-fields', 'Reads as settings.', { option: 'from-config' });
+  state = reply(state, 'rerank-fields', 'Corrected.', undefined, { ...DEMO.cards[0]!, options: DEMO.cards[0]!.options.filter(option => option.id !== 'from-config') });
+  const plain = renderRound(state, 100, 80, { chrome: 'pane' }).frame.plain();
+  assert.match(plain, /That option was revised away/);
+  assert.doesNotMatch(plain, /Confirm {3,}Not quite/);
 });

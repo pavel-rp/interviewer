@@ -205,3 +205,35 @@ test('withdraw closes an open round without an event; decisions come from keyed 
   const keyed = run(round([card('q1', { key: 'k1' }), card('q2')]), { type: 'choose', card: 'q1', answer: { kind: 'option', option: 'a' } });
   assert.deepEqual(decisionsFrom(keyed, '2026-10-16T00:00:00Z').map(item => [item.key, item.answer]), [['k1', 'Option A']]);
 });
+
+// --- review fixes -------------------------------------------------------------
+
+test('inherited names cannot be card ids or decision keys, in an ask or a revision', () => {
+  for (const name of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.equal(validateAsk({ title: 't', cards: [card(name)] }).ok, false, `id ${name}`);
+    assert.equal(validateAsk({ title: 't', cards: [card('x', { key: name })] }, {}).ok, false, `key ${name}`);
+    assert.equal(validateCard(card(name)).ok, false, `revised id ${name}`);
+  }
+});
+
+test('a revision onto a settled key must say what changed, as an ask must', () => {
+  const decided = { 'db.engine': { key: 'db.engine', question: 'Which DB?', answer: 'Postgres', at: '2026-10-01T10:00:00Z', round: 'r' } };
+  const refused = validateCard(card('x', { key: 'db.engine' }), 'revise', decided);
+  assert.equal(refused.ok, false);
+  assert.match(refused.ok ? '' : refused.errors[0]!.message, /already decided "Postgres"/);
+  assert.equal(validateCard(card('x', { key: 'db.engine', changed: 'The host dropped it.' }), 'revise', decided).ok, true);
+});
+
+test('a reading for an option a revision removed cannot be confirmed', () => {
+  let state = reply(round(), 'q1', 'I read that as B.', { option: 'b' });
+  state = reply(state, 'q1', 'Corrected.', undefined, card('q1', { options: [{ id: 'a', label: 'Option A', consequence: 'A', by: 'claude' }, { id: 'c', label: 'Option C', consequence: 'C', by: 'claude' }] }));
+  assert.equal(run(state, { type: 'confirm', card: 'q1', message: 1 }), state);
+  assert.equal(state.answers.q1, undefined);
+});
+
+test('a revision always asks again, even when the option ids survive', () => {
+  const state = run(round(), { type: 'choose', card: 'q1', answer: { kind: 'option', option: 'a' } }, { type: 'choose', card: 'q2', answer: { kind: 'none' } });
+  const revised = reply(state, 'q1', 'Option A now also pushes.', undefined, card('q1', { options: [{ id: 'a', label: 'Commit and push', consequence: 'Pushes', by: 'claude' }, { id: 'b', label: 'Option B', consequence: 'B', by: 'you' }] }));
+  assert.equal(revised.answers.q1, undefined);
+  assert.deepEqual(revised.answers.q2, { kind: 'none' }, 'other cards keep their answers');
+});

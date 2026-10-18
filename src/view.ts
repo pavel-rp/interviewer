@@ -1,6 +1,7 @@
-import { Frame, button, clip, context, field, measureButton, scrollbar, textWidth, themes, wrap } from '../vendor/uinlay/index';
-import type { Context, Rect } from '../vendor/uinlay/index';
-import { acceptable, answeredCount, current, echo, expandKey, ids, waiting } from './model';
+import type { ClientElements, RenderElement } from 'claude-code';
+import { Frame, button, clip, context, field, measureButton, textWidth, themes, wrap } from '../vendor/uinlay/index';
+import type { Context, Hit, Rect } from '../vendor/uinlay/index';
+import { acceptable, answeredCount, current, echo, expandKey, ids, staleReading, waiting } from './model';
 import type { InterviewCard, InterviewEvent, InterviewRound } from './types';
 
 // One card at a time: a fixed header (where you are), a scrolling body (the
@@ -16,7 +17,7 @@ const COMPACT_PREVIEW = 6;
 const COMPACT_THREAD = 3;
 export interface ControlInfo { id: string; kind: 'button' | 'input' | 'scroll'; disabled: boolean }
 export interface Layout {
-  frame: Frame;
+  frame: Canvas;
   /** Every control in focus order, including ones scrolled out of view. */
   controls: ControlInfo[];
   /** Body line of each body control's first row; header/footer controls are absent. */
@@ -174,6 +175,7 @@ function cardLines(round: InterviewRound, card: InterviewCard, width: number, cu
       : `"${message.reading.text}"`;
     lines.push(...prose(reading, width, theme.accent, { label: 'Reads your reply as', labelFg: theme.accent, indent: 2 }));
     if (message.settled) lines.push(...prose(message.settled === 'confirmed' ? 'You confirmed it.' : 'You said not quite.', width, theme.muted, { indent: 2 }));
+    else if (staleReading(card, message.reading)) lines.push(...prose('That option was revised away; reply again if it still matters.', width, theme.muted, { indent: 2 }));
     else if (open) lines.push(...buttonRows([
       { id: ids.confirm(card.id, message.id), label: 'Confirm', variant: 'primary' },
       { id: ids.reject(card.id, message.id), label: 'Not quite' },
@@ -241,8 +243,8 @@ function settledLines(round: InterviewRound, width: number): Line[] {
 }
 
 function headerRows(chrome: Chrome): number { return chrome === 'pane' ? 2 : 1; }
-function footerRows(round: InterviewRound, chrome: Chrome): number { return round.status === 'open' && chrome === 'pane' ? 2 : 1; }
 const innerWidth = (columns: number) => Math.max(24, columns - 4);
+const cardWidth = (columns: number) => Math.max(28, Math.min(CARD_COLUMNS, Math.floor(columns)));
 
 // Lines are built once per round state: a hover or any other repaint only
 // paints them again. Rounds are immutable, so the object is the key.
@@ -262,15 +264,6 @@ function bodyLines(round: InterviewRound, columns: number, cursor: number | unde
   return lines;
 }
 
-export function naturalRows(round: InterviewRound, columns: number, chrome: Chrome, detail: Detail = 'full'): number {
-  return headerRows(chrome) + bodyLines(round, Math.min(columns, CARD_COLUMNS), undefined, detail).length + footerRows(round, chrome);
-}
-
-/** Full detail when it fits the rows, else compact. */
-export function fitDetail(round: InterviewRound, columns: number, rows: number, chrome: Chrome): Detail {
-  return naturalRows(round, columns, chrome, 'full') <= rows ? 'full' : 'compact';
-}
-
 function footerButtons(round: InterviewRound, compact: boolean) {
   if (round.status !== 'open') return [{ id: 'nav:dismiss', label: 'Dismiss', variant: 'quiet' as const }];
   const answered = answeredCount(round);
@@ -284,12 +277,63 @@ function footerButtons(round: InterviewRound, compact: boolean) {
   ];
 }
 
+/** Every footer row: on a narrow card the actions wrap, and none may be dropped. */
+function footerLines(round: InterviewRound, chrome: Chrome, w: number): Line[] {
+  const rows = buttonRows(footerButtons(round, w < 70), w);
+  if (round.status === 'open' && chrome === 'pane') rows.push({ paint: (c, x, y) => put(c, x, y, '1–4 choose · ←/→ card · w why · r reply · c context · wheel scrolls', w, theme.muted) });
+  return rows;
+}
+
+export function naturalRows(round: InterviewRound, columns: number, chrome: Chrome, detail: Detail = 'full'): number {
+  const width = cardWidth(columns);
+  return headerRows(chrome) + bodyLines(round, width, undefined, detail).length + footerLines(round, chrome, innerWidth(width)).length;
+}
+
+/** Full detail when it fits the rows, else compact. */
+export function fitDetail(round: InterviewRound, columns: number, rows: number, chrome: Chrome): Detail {
+  return naturalRows(round, columns, chrome, 'full') <= rows ? 'full' : 'compact';
+}
+
+/** The compositor's frame holds at most this many rows; a taller card stacks frames. */
+const FRAME_ROWS = 64;
+/**
+ * The most rows a card draws, keeping its tree well inside the host's bounds
+ * for a Client (100,000 serialized characters: about 550 a row at worst). A card taller still scrolls
+ * inside itself (PgUp/PgDn); every valid card short of a very long thread fits.
+ */
+export const CARD_ROWS = 120;
+
+/** One drawing of `height` rows made of stacked compositor frames. */
+export class Canvas {
+  readonly frames: Frame[] = [];
+  constructor(readonly width: number, readonly height: number) {
+    for (let top = 0; top < height; top += FRAME_ROWS) this.frames.push(new Frame(width, Math.min(FRAME_ROWS, height - top), { fg: theme.text, bg: theme.canvas }));
+  }
+  /** The frame holding row `y`, and the row within it. */
+  at(y: number): { index: number; y: number } {
+    const index = Math.max(0, Math.min(this.frames.length - 1, Math.floor(y / FRAME_ROWS)));
+    return { index, y: y - index * FRAME_ROWS };
+  }
+  hitAt(x: number, y: number): Hit | undefined {
+    if (y < 0 || y >= this.height) return undefined;
+    const { index, y: row } = this.at(y);
+    const hit = this.frames[index]!.hitAt(x, row);
+    return hit && { ...hit, y: hit.y + index * FRAME_ROWS };
+  }
+  plain(): string { return this.frames.map(frame => frame.plain()).join('\n'); }
+  toTree(elements: ClientElements): RenderElement {
+    if (this.frames.length === 1) return this.frames[0]!.toTree(elements);
+    return elements.Box({ flexDirection: 'column', width: this.width, height: this.height, children: this.frames.map(frame => frame.toTree(elements)) });
+  }
+}
+
 export function renderRound(round: InterviewRound, columns: number, rows: number, options: ViewOptions = {}): Layout {
   const chrome = options.chrome ?? 'band';
-  const width = Math.max(28, Math.min(CARD_COLUMNS, Math.floor(columns)));
-  const height = Math.max(4, Math.min(64, Math.floor(rows)));
-  const frame = new Frame(width, height, { fg: theme.text, bg: theme.canvas });
-  const c = context(frame, theme, { focus: options.keyboard === false ? '' : round.focus, hover: options.hover ?? '' });
+  const width = cardWidth(columns);
+  const height = Math.max(4, Math.min(CARD_ROWS, Math.floor(rows)));
+  const frame = new Canvas(width, height);
+  const contexts = frame.frames.map(part => context(part, theme, { focus: options.keyboard === false ? '' : round.focus, hover: options.hover ?? '' }));
+  const paintAt = (y: number, paint: (c: Context, row: number) => void) => { const at = frame.at(y); paint(contexts[at.index]!, at.y); };
   const x = 2, w = innerWidth(width);
   const controls: ControlInfo[] = [];
   const lineOf: Record<string, number> = {};
@@ -300,13 +344,16 @@ export function renderRound(round: InterviewRound, columns: number, rows: number
     ? `Q${round.at + 1} of ${round.cards.length} · ${answeredCount(round)} recorded${waitingCount ? ` · ${waitingCount} waiting on Claude` : ''}`
     : round.status;
   const title = `INTERVIEW · ${round.title}${round.fixture ? ' · fixture' : ''}`;
-  put(c, x, 0, title, Math.max(0, w - textWidth(position) - 2), theme.accent, true);
-  put(c, x + w - Math.min(w, textWidth(position)), 0, position, Math.min(w, textWidth(position)), theme.muted);
-  if (chrome === 'pane') frame.put(x, 1, '─'.repeat(w), { fg: theme.border }, w);
+  paintAt(0, (c, y) => {
+    put(c, x, y, title, Math.max(0, w - textWidth(position) - 2), theme.accent, true);
+    put(c, x + w - Math.min(w, textWidth(position)), y, position, Math.min(w, textWidth(position)), theme.muted);
+  });
+  if (chrome === 'pane') paintAt(1, (c, y) => c.frame.put(x, y, '─'.repeat(w), { fg: theme.border }, w));
 
-  // Body: the current card, scrolled.
+  // Body: the current card, scrolled only when the rows given are fewer than it needs.
   const top = headerRows(chrome);
-  const bottom = footerRows(round, chrome);
+  const footer = footerLines(round, chrome, w);
+  const bottom = footer.length;
   const bodyRows = Math.max(1, height - top - bottom);
   const lines = bodyLines(round, width, options.cursor, options.detail ?? 'full');
   const contentHeight = lines.length;
@@ -316,19 +363,24 @@ export function renderRound(round: InterviewRound, columns: number, rows: number
       if (lineOf[control.id] === undefined) { lineOf[control.id] = index; controls.push(control); }
     }
     const y = top + index - scroll;
-    if (y >= top && y < top + bodyRows) line.paint(c, x, y, w - 1);
+    if (y >= top && y < top + bodyRows) paintAt(y, (c, row) => line.paint(c, x, row, w - 1));
   });
   if (contentHeight > bodyRows) {
-    scrollbar(c, { x: width - 2, y: top, w: 1, h: bodyRows }, contentHeight, bodyRows, scroll, ids.scroll);
+    // Drawn row by row so it can span stacked frames.
+    const thumb = Math.max(1, Math.floor(bodyRows * bodyRows / contentHeight));
+    const start = Math.round((bodyRows - thumb) * Math.min(1, scroll / Math.max(1, contentHeight - bodyRows)));
+    for (let i = 0; i < bodyRows; i++) paintAt(top + i, (c, row) => {
+      const on = i >= start && i < start + thumb;
+      c.frame.put(width - 2, row, on ? '┃' : '│', { fg: on ? theme.accent : theme.border }, 1);
+    });
     controls.push({ id: ids.scroll, kind: 'scroll', disabled: false });
   }
 
-  // Footer: moving and sending.
-  const fy = height - bottom;
-  const footer = buttonRows(footerButtons(round, w < 70), w)[0]!;
-  footer.paint(c, x, fy, w);
-  controls.push(...(footer.controls ?? []));
-  if (bottom === 2) put(c, x, fy + 1, '1–4 choose · ←/→ card · w why · r reply · c context · wheel scrolls', w, theme.muted);
+  // Footer: moving and sending, every row of it.
+  footer.forEach((line, index) => {
+    for (const control of line.controls ?? []) controls.push(control);
+    paintAt(height - bottom + index, (c, row) => line.paint(c, x, row, w));
+  });
   return { frame, controls, lineOf, top, bodyRows, contentHeight, scroll };
 }
 

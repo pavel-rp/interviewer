@@ -83,6 +83,12 @@ export function keyActions(state: InterviewRound, key: ClientKeyEvent, layout: L
     }
   }
   if (key.ctrl || key.meta) return [];
+  // Only a card taller than the most rows it may draw scrolls inside itself.
+  if (layout.contentHeight > layout.bodyRows && (k === 'pageup' || k === 'pagedown' || k === 'home' || k === 'end')) {
+    const max = layout.contentHeight - layout.bodyRows;
+    const offset = k === 'home' ? 0 : k === 'end' ? max : Math.max(0, Math.min(max, layout.scroll + (k === 'pageup' ? -layout.bodyRows : layout.bodyRows)));
+    return [{ type: 'scroll', offset }];
+  }
   if (k === 'up' || k === 'down') return move(k === 'up' ? -1 : 1);
   if (k === 'return' || k === 'enter' || k === 'space' || k === ' ') return controls.some(control => control.id === state.focus) ? activate(state, state.focus) : [];
   if (state.status !== 'open') return [];

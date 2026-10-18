@@ -356,3 +356,22 @@ test('scrolling is the host\'s: a wheel tick goes three rows, keys are unchanged
   expect(offsets.at(-1)).toBe(0)
   expect(((await pane.find({ type: 'Client', key: 'interviewer-pane' }))?.props.props as any).round.scroll).toBe(0)
 })
+
+test('a revision onto a settled decision key is refused unless it says what changed', async ($, on) => {
+  const prompts: string[] = []
+  baselines(on, prompts)
+  const clock = mock.clock(on)
+  await start($)
+  const first = await call($, 'mcp__interviewer__ask', { title: 'Settle', cards: [card('q1', { key: 'db.engine' })] })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.post(batch(first.round, [{ type: 'choose', card: 'q1', answer: { kind: 'option', option: 'a' } }, { type: 'send' }]), { in: BAND_KEY })
+  await clock.advance(0)
+  await band.unmount()
+  const second = await call($, 'mcp__interviewer__ask', { title: 'Other', cards: [card('q2')] })
+  const reason = await denied($, 'mcp__interviewer__reply', { round: second.round, card: 'q2', text: 'Corrected.', revise: card('q2', { key: 'db.engine' }) })
+  expect(reason).toContain('already decided')
+  expect(await call($, 'mcp__interviewer__reply', { round: second.round, card: 'q2', text: 'Corrected.', revise: card('q2', { key: 'db.engine', changed: 'The host dropped it.' }) })).toMatchObject({ status: 'shown' })
+  const again = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 40 }, surface: 'terminal' })
+  const drawn = await again.find({ type: 'Client', key: BAND_KEY })
+  expect(((drawn?.props.props as any).round.previous)['db.engine']).toMatchObject({ answer: 'Option A' })
+})

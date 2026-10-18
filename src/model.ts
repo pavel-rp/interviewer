@@ -59,6 +59,11 @@ export function waiting(round: InterviewRound, card: string): boolean {
   return thread.length > 0 && thread[thread.length - 1]!.from === 'you';
 }
 
+/** A reading that names an option a revision has since removed. */
+export function staleReading(card: InterviewCard, reading: InterviewReading): boolean {
+  return 'option' in reading && !card.options.some(option => option.id === reading.option);
+}
+
 export function answeredCount(round: InterviewRound): number {
   return round.cards.filter(card => round.answers[card.id]).length;
 }
@@ -218,6 +223,7 @@ function operate(round: InterviewRound, action: InterviewAction): InterviewRound
       const after = { ...round, threads: { ...round.threads, [card.id]: settled } };
       if (action.type === 'reject') return { ...after, focus: ids.reply(card.id) };
       const reading = message.reading;
+      if (staleReading(card, reading)) return round;
       return record(after, card, 'option' in reading ? { kind: 'option', option: reading.option } : { kind: 'text', text: reading.text });
     }
     case 'accept-rest': {
@@ -274,13 +280,9 @@ export function reply(round: InterviewRound, cardId: string, text: string, readi
   const message: InterviewMessage = { id: thread.length + 1, from: 'claude', kind: 'reply', text, ...(reading ? { reading } : {}) };
   let after: InterviewRound = { ...round, threads: { ...round.threads, [cardId]: [...thread, message] }, serial: round.serial + 1 };
   if (revise) {
-    after = { ...after, cards: round.cards.map(item => item.id === cardId ? revise : item) };
-    const answer = after.answers[cardId];
-    // An answer naming an option the revision removed no longer means anything.
-    if (answer?.kind === 'option' && !revise.options.some(option => option.id === answer.option)) {
-      const { [cardId]: _, ...answers } = after.answers;
-      after = { ...after, answers };
-    }
+    // The operator answered the old card; a revised one is asked again.
+    const { [cardId]: _, ...answers } = after.answers;
+    after = { ...after, cards: round.cards.map(item => item.id === cardId ? revise : item), answers };
   }
   return after;
 }

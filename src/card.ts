@@ -11,6 +11,9 @@ export const LIMITS = {
 } as const;
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// Card ids and decision keys index plain objects (answers, threads, the decision
+// log); an inherited name such as `constructor` would read as a saved entry.
+const INHERITED = new Set(Object.getOwnPropertyNames(Object.prototype));
 // The interviewer supplies these on every card; an author option repeating one is refused.
 const RESERVED_LABELS = /^(none|other|skip|nothing|you decide|i don'?t know|you do it|leave it)\b/i;
 
@@ -34,6 +37,7 @@ class Check {
   id(value: unknown, path: string): string | undefined {
     const id = this.text(value, path, LIMITS.id);
     if (id !== undefined && !ID.test(id)) { this.fail(path, 'letters, digits, dot, underscore or hyphen, starting with a letter or digit'); return undefined; }
+    if (id !== undefined && INHERITED.has(id)) { this.fail(path, `"${id}" is reserved; choose another id`); return undefined; }
     return id;
   }
 }
@@ -98,6 +102,7 @@ function card(check: Check, value: unknown, path: string): InterviewCard | undef
   }
   const leaves = check.text(value.leaves, `${path}.leaves`, LIMITS.leaves, false);
   const key = check.text(value.key, `${path}.key`, LIMITS.key, false);
+  if (key && INHERITED.has(key)) check.fail(`${path}.key`, `"${key}" is reserved; choose another key`);
   const changed = check.text(value.changed, `${path}.changed`, LIMITS.changed, false);
   if (value.gate !== undefined && typeof value.gate !== 'boolean') check.fail(`${path}.gate`, 'must be true or false');
   if (check.errors.length !== before || !id || !question || !why) return undefined;
@@ -124,10 +129,7 @@ export function validateAsk(value: unknown, decided: Record<string, InterviewDec
   else value.cards.forEach((entry, index) => { const parsed = card(check, entry, `cards[${index}]`); if (parsed) cards.push(parsed); });
   const ids = cards.map(entry => entry.id);
   if (new Set(ids).size !== ids.length) check.fail('cards', 'card ids must be unique');
-  cards.forEach((entry, index) => {
-    const prior = entry.key ? decided[entry.key] : undefined;
-    if (prior && !entry.changed) check.fail(`cards[${index}].key`, `already decided "${prior.answer}" on ${prior.at.slice(0, 10)} ("${prior.question}"). Drop the card, or pass changed with what is different now.`);
-  });
+  cards.forEach((entry, index) => settled(check, entry, decided, `cards[${index}]`));
   if (check.errors.length || !title) return { ok: false, errors: check.errors };
   return { ok: true, value: { title, cards } };
 }
@@ -145,9 +147,17 @@ export function validateReading(value: unknown, entry: InterviewCard): Valid<Int
   return { ok: false, errors: [{ path: 'reading', message: 'must be {option} or {text}' }] };
 }
 
-export function validateCard(value: unknown, path = 'revise'): Valid<InterviewCard> {
+/** A card whose key is already decided must say what changed, or it re-asks a settled matter. */
+function settled(check: Check, entry: InterviewCard, decided: Record<string, InterviewDecision>, path: string): void {
+  const prior = entry.key && Object.hasOwn(decided, entry.key) ? decided[entry.key] : undefined;
+  if (prior && !entry.changed) check.fail(`${path}.key`, `already decided "${prior.answer}" on ${prior.at.slice(0, 10)} ("${prior.question}"). Drop the card, or pass changed with what is different now.`);
+}
+
+/** A revision is held to the same rules as an ask, the decision log included. */
+export function validateCard(value: unknown, path = 'revise', decided: Record<string, InterviewDecision> = {}): Valid<InterviewCard> {
   const check = new Check();
   const parsed = card(check, value, path);
+  if (parsed) settled(check, parsed, decided, path);
   return parsed && !check.errors.length ? { ok: true, value: parsed } : { ok: false, errors: check.errors };
 }
 

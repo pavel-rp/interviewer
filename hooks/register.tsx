@@ -6,7 +6,7 @@ import { DEMO, DEMO_PREVIOUS, fixtureReply } from '../src/fixtures'
 import {
   applyBatch, createRound, current, decisionsFrom, findCard, interrupted, markEvent, parseBatch, publicRound, reducer, reply, withdraw,
 } from '../src/model'
-import { CARD_COLUMNS, naturalRows } from '../src/view'
+import { CARD_COLUMNS, CARD_ROWS, naturalRows } from '../src/view'
 import type { Detail } from '../src/view'
 import type { InterviewAction, InterviewCard, InterviewDecision, InterviewEvent, InterviewRound } from '../types'
 
@@ -450,17 +450,22 @@ export const register: Register = on => {
     const card = typeof input.card === 'string' ? findCard(round, input.card) : undefined
     if (!card) return { deny: json({ error: 'no card in this round has that id', cards: round.cards.map(item => item.id) }) }
     let revise: InterviewCard | undefined
+    let settledBefore: InterviewDecision | undefined
     if (input.revise !== undefined) {
-      const checked = validateCard(input.revise)
+      const decided = await decisions($)
+      const checked = validateCard(input.revise, 'revise', decided)
       if (!checked.ok) return { deny: json({ error: 'the revised card was refused', problems: checked.errors }) }
       if (checked.value.id !== card.id) return { deny: json({ error: 'a revision keeps the card id' }) }
       revise = checked.value
+      settledBefore = revise.key && Object.hasOwn(decided, revise.key) ? decided[revise.key] : undefined
     }
     const reading = validateReading(input.reading, revise ?? card)
     if (!reading.ok) return { deny: json({ error: 'reading was refused', problems: reading.errors }) }
     const out = await commit($, current => {
       if (!live(current) || current.generation !== round.generation) return { round: current, out: false }
-      return { round: reply(current, card.id, text, reading.value, revise), out: true }
+      const replied = reply(current, card.id, text, reading.value, revise)
+      // A revision onto a settled key shows that decision, as an ask would.
+      return { round: revise?.key && settledBefore ? { ...replied, previous: { ...replied.previous, [revise.key]: settledBefore } } : replied, out: true }
     })
     if (!out) return { deny: json({ error: 'the round closed meanwhile' }) }
     return { result: json({ status: 'shown', card: card.id, instruction: reading.value ? 'Your reading is shown with Confirm / Not quite; it is not an answer until the operator confirms. End your turn.' : 'Shown in the card. The round is still open; end your turn.' }) }
@@ -515,7 +520,7 @@ export const register: Register = on => {
     const room = Math.max(4, e.props.maxRows - bar)
     sites.band = { columns: width, rows: room }
     bandSite = e.requestId
-    const natural = rowsOf(round, width, 'band', detailFor(round, 'band'))
+    const natural = Math.min(CARD_ROWS, rowsOf(round, width, 'band', detailFor(round, 'band')))
     if (natural > room) {
       // Taller than the band: drawn whole for the host to scroll (wheel and
       // `n more`), the digit buttons first so they stay armed at the top.
@@ -545,7 +550,7 @@ export const register: Register = on => {
     const bar = open ? answerBarRows(round, width) : 0
     // The whole card; the host scrolls the pane when it is taller, the digit
     // buttons then first so they stay in view.
-    const natural = rowsOf(round, width, 'pane')
+    const natural = Math.min(CARD_ROWS, rowsOf(round, width, 'pane'))
     const overflows = e.props.scroll.bodyRows > 0 && natural + bar > e.props.scroll.bodyRows
     return (
       <Box flexDirection="column" width={width}>
