@@ -1,0 +1,17 @@
+{
+  "name": "interviewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An interviewing TUI for Claude Code, painted with UInlay components",
+  "type": "module",
+  "scripts": {
+    "dev": "claude --plugin-dir .",
+    "validate": "claude plugin validate .",
+    "test": "tsx --test tests/*.spec.ts",
+    "test:host": "claude plugin test .",
+    "typecheck": "tsc --noEmit",
+    "vendor": "node tools/vendor-uinlay.mjs",
+    "check": "npm run typecheck && npm test && npm run validate && npm run test:host"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "tsx": "^4.20.0", "typescript": "^5.9.0" }
+}

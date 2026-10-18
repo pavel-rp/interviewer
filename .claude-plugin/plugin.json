@@ -1,0 +1,6 @@
+{
+  "name": "interviewer",
+  "version": "0.1.0",
+  "description": "One-card-at-a-time interviews: evidence, reasons and previews on every question, answers sent back together",
+  "types": "./types/index.d.ts"
+}
