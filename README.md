@@ -51,8 +51,8 @@ src/fixtures.ts  the demo round and its canned replies
 hooks/register.tsx  tools, band and pane, delivery, /interview
 ```
 
-- `npm test`: Node behaviour tests (`tests/*.spec.ts`).
-- `npm run test:host`: native host tests (`tests/*.test.ts`).
-- `npm run validate`, then `npm run typecheck`. Typecheck reads `.claude-plugin/types/`, which the engine writes on launch.
+- `pnpm test`: Node behaviour tests (`tests/*.spec.ts`).
+- `pnpm run test:host`: native host tests (`tests/*.test.ts`).
+- `pnpm run validate`, then `pnpm run typecheck`. Typecheck reads `.claude-plugin/types/`, which the engine writes on launch.
 - `python3 -I tools/live-demo.py`: the fixture demo in a real Claude Code terminal, with captures in `.runtime/live/`. It uses pyte and Pillow from `INTERVIEWER_PY_DEPS`, `.runtime/python` or `../uinlay/.runtime/python`. `INTERVIEWER_CWD` runs it from an already trusted folder.
-- `npm run vendor -- ../uinlay`: re-copy the four UInlay files and record the commit in `vendor/uinlay/VENDORED.md`. Don't edit them here.
+- `pnpm run vendor ../uinlay`: re-copy the four UInlay files and record the commit in `vendor/uinlay/VENDORED.md`. Don't edit them here.
