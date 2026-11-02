@@ -2,6 +2,7 @@
   "name": "interviewer",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@12.16.1",
   "description": "An interviewing TUI for Claude Code, painted with UInlay components",
   "type": "module",
   "scripts": {
@@ -11,7 +12,7 @@
     "test:host": "claude plugin test .",
     "typecheck": "tsc --noEmit",
     "vendor": "node tools/vendor-uinlay.mjs",
-    "check": "npm run typecheck && npm test && npm run validate && npm run test:host"
+    "check": "pnpm run typecheck && pnpm test && pnpm run validate && pnpm run test:host"
   },
   "devDependencies": { "@types/node": "^22.0.0", "tsx": "^4.20.0", "typescript": "^5.9.0" }
 }

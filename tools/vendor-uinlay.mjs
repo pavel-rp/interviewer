@@ -14,6 +14,6 @@ for (const file of FILES) await copyFile(resolve(source, 'src', file), resolve('
 await writeFile('vendor/uinlay/VENDORED.md', `# Vendored UInlay paint library
 
 Copied from UInlay \`src/\` (${FILES.join(', ')}) at commit \`${commit}\`${dirty ? ' **with uncommitted changes**' : ''}.
-Do not edit these files here; change UInlay and re-run \`npm run vendor\`.
+Do not edit these files here; change UInlay and re-run \`pnpm run vendor\`.
 `);
 console.log(`Vendored ${FILES.length} files from ${source} @ ${commit.slice(0, 7)}${dirty ? ' (dirty)' : ''}`);
